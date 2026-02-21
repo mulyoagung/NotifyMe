@@ -20,7 +20,7 @@ NotifyMe adalah aplikasi cerdas berbasis Flutter yang dirancang untuk memantau p
 
 Anda dapat mengunduh versi final aplikasi untuk Android di bawah ini:
 
-### **[📦 Download NotifyMe APK](notifyme.apk)**
+### **[📦 Download NotifyMe APK](https://github.com/mulyoagung/NotifyMe/raw/main/notifyme.apk)**
 *(Setelah diunduh, buka file tersebut di ponsel Android Anda untuk menginstalnya.)*
 
 ---
