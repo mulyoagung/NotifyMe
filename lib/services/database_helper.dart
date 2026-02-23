@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:path/path.dart';
-import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../models/monitored_link.dart';
 import 'package:path_provider/path_provider.dart';
@@ -35,8 +34,14 @@ class DatabaseHelper {
     return await databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 1,
+        version: 2,
         onCreate: _createDB,
+        onUpgrade: (db, oldVersion, newVersion) async {
+          if (oldVersion < 2) {
+            await db.execute(
+                "ALTER TABLE links ADD COLUMN previousSnapshot TEXT DEFAULT ''");
+          }
+        },
       ),
     );
   }
@@ -58,7 +63,8 @@ CREATE TABLE links (
   isActive $boolType,
   lastCheckedAt $textType,
   hasUpdate $boolType,
-  lastSnapshot $textTypeNull
+  lastSnapshot $textTypeNull,
+  previousSnapshot $textTypeNull
   )
 ''');
   }
@@ -83,7 +89,8 @@ CREATE TABLE links (
         'isActive',
         'lastCheckedAt',
         'hasUpdate',
-        'lastSnapshot'
+        'lastSnapshot',
+        'previousSnapshot'
       ],
       where: 'id = ?',
       whereArgs: [id],

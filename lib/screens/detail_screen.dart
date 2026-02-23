@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'dart:convert';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:diff_match_patch/diff_match_patch.dart';
 import '../models/monitored_link.dart';
 import '../theme.dart';
 import '../services/database_helper.dart';
@@ -36,15 +38,49 @@ class _DetailScreenState extends State<DetailScreen> {
                   _isLoading = false;
                 });
                 if (widget.link.cssSelector.isNotEmpty) {
+                  bool hasPrevious = widget.link.previousSnapshot.isNotEmpty &&
+                      widget.link.hasUpdate;
+                  String oldItemsStr =
+                      hasPrevious ? widget.link.previousSnapshot : '[]';
+
                   _controller.runJavaScript('''
                     setTimeout(() => {
-                      var el = document.querySelector("${widget.link.cssSelector}");
-                      if (el) {
-                        el.style.outline = '4px solid #FF5F56';
-                        el.style.backgroundColor = 'rgba(255, 95, 86, 0.3)';
-                        el.scrollIntoView({behavior: 'smooth', block: 'center'});
+                      var selector = "${widget.link.cssSelector.replaceAll('"', '\\"')}";
+                      if (!selector) return;
+                      var nodes = document.querySelectorAll(selector);
+                      if (nodes.length === 0) return;
+                      
+                      var isContainer = (nodes.length === 1 && nodes[0].children && nodes[0].children.length > 0);
+                      var itemsToCheck = isContainer ? nodes[0].children : nodes;
+                      
+                      var oldItems = $oldItemsStr;
+                      var firstNew = null;
+                      
+                      for (var i = 0; i < itemsToCheck.length; i++) {
+                        var child = itemsToCheck[i];
+                        var text = child.innerText ? child.innerText.trim() : '';
+                        if (text.length === 0) continue;
+                        
+                        var isNew = false;
+                        if (oldItems && oldItems.length > 0) {
+                          isNew = oldItems.indexOf(text) === -1;
+                        } else {
+                          isNew = true;
+                        }
+                        
+                        if (isNew) {
+                          // Try to highlight the box itself instead of the entire container segment.
+                          child.style.outline = '4px solid #00F4B1';
+                          child.style.backgroundColor = 'rgba(0, 244, 177, 0.3)';
+                          child.style.transition = 'all 0.3s ease';
+                          
+                          if (!firstNew) {
+                            firstNew = child;
+                            child.scrollIntoView({behavior: 'smooth', block: 'center'});
+                          }
+                        }
                       }
-                    }, 500);
+                    }, 1000);
                   ''');
                 }
               }
@@ -80,6 +116,17 @@ class _DetailScreenState extends State<DetailScreen> {
         const SnackBar(content: Text('Tandai belum dibaca')),
       );
       Navigator.pop(context);
+    }
+  }
+
+  String _formatJsonList(String jsonString) {
+    try {
+      final List<dynamic> list = jsonDecode(jsonString);
+      if (list.isEmpty) return 'Array kosong (Tidak ada text).';
+      return list.map((item) => '- \$item').join('\\n\\n');
+    } catch (_) {
+      // Fallback in case of raw text (old data format)
+      return jsonString;
     }
   }
 
@@ -350,21 +397,75 @@ class _DetailScreenState extends State<DetailScreen> {
                 ],
               ),
               const SizedBox(height: 16),
-              Text(
-                widget.link.lastSnapshot.isEmpty
-                    ? 'Belum ada konten snapshot. Aplikasi sedang memantau secara berkala.'
-                    : widget.link.lastSnapshot,
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 13,
-                  height: 1.5,
-                ),
-              ),
+              widget.link.lastSnapshot.isEmpty ||
+                      widget.link.lastSnapshot == '[]'
+                  ? const Text(
+                      'Belum ada konten snapshot (atau format text kosong).',
+                      style: TextStyle(fontFamily: 'monospace', fontSize: 13),
+                    )
+                  : _buildDiffView(widget.link.previousSnapshot,
+                      widget.link.lastSnapshot, isDark),
             ],
           ),
         ),
         const SizedBox(height: 100),
       ],
+    );
+  }
+
+  Widget _buildDiffView(String oldText, String newText, bool isDark) {
+    String oldFormatted = _formatJsonList(oldText);
+    String newFormatted = _formatJsonList(newText);
+
+    if (oldFormatted == newFormatted ||
+        oldFormatted == 'Array kosong (Tidak ada text).') {
+      return Text(
+        newFormatted,
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 13,
+          height: 1.5,
+          color: isDark ? Colors.grey.shade300 : Colors.black87,
+        ),
+      );
+    }
+
+    List<Diff> diffs = diff(oldFormatted, newFormatted);
+    cleanupSemantic(diffs);
+
+    return RichText(
+      text: TextSpan(
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 13,
+          height: 1.5,
+          color: isDark ? Colors.grey.shade300 : Colors.black87,
+        ),
+        children: diffs.map((d) {
+          Color backgroundColor = Colors.transparent;
+          Color textColor = isDark ? Colors.grey.shade300 : Colors.black87;
+          TextDecoration decoration = TextDecoration.none;
+
+          if (d.operation == DIFF_INSERT) {
+            backgroundColor = const Color(0xFF00F4B1).withOpacity(0.2);
+            textColor =
+                isDark ? const Color(0xFF00F4B1) : Colors.green.shade800;
+          } else if (d.operation == DIFF_DELETE) {
+            backgroundColor = Colors.red.withOpacity(0.2);
+            textColor = isDark ? Colors.redAccent : Colors.red.shade800;
+            decoration = TextDecoration.lineThrough;
+          }
+
+          return TextSpan(
+            text: d.text,
+            style: TextStyle(
+              backgroundColor: backgroundColor,
+              decoration: decoration,
+              color: textColor,
+            ),
+          );
+        }).toList(),
+      ),
     );
   }
 

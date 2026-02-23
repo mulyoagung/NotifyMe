@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui';
+import 'dart:convert' as dart_convert;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:workmanager/workmanager.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'database_helper.dart';
 import 'scraper_service.dart';
@@ -15,6 +18,7 @@ void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     // In background isolates, make sure to initialize bindings
     WidgetsFlutterBinding.ensureInitialized();
+    DartPluginRegistrant.ensureInitialized();
     await NotificationService.instance.init();
 
     if (!kIsWeb && Platform.isAndroid) {
@@ -24,7 +28,29 @@ void callbackDispatcher() {
   });
 }
 
+String _formatSummary(String content) {
+  try {
+    final List<dynamic> list = dart_convert.jsonDecode(content);
+    if (list.isEmpty) return 'Tidak ada text.';
+    // Take first 3 new texts and join them naturally without JSON brackets
+    return list.take(3).join('\n\n');
+  } catch (_) {
+    return content.length > 200 ? content.substring(0, 200) + '...' : content;
+  }
+}
+
 Future<void> _checkUpdates() async {
+  // Always verify internet connection to prevent battery drain on retries
+  try {
+    final connectivityResult = await Connectivity().checkConnectivity();
+    if (connectivityResult.contains(ConnectivityResult.none)) {
+      print('Device is offline. Skipping update checks.');
+      return;
+    }
+  } catch (e) {
+    print('Connectivity check failed: \$e');
+  }
+
   final prefs = await SharedPreferences.getInstance();
   final bool pushEnabled = prefs.getBool('pushEnabled') ?? true;
   final int reminderMinutes = prefs.getInt('reminderMinutes') ?? 15;
@@ -62,11 +88,12 @@ Future<void> _checkUpdates() async {
       if (newContent != null) {
         if (link.lastSnapshot != newContent) {
           link.hasUpdate = true;
+          link.previousSnapshot = link.lastSnapshot;
           if (pushEnabled) {
             await NotificationService.instance.showUpdateNotification(
               link.id ?? 0,
               'Pembaruan pada ${link.name}',
-              '''Terdapat perubahan pada halaman yang dipantau. Buka notifikasi ini untuk detail lebih lanjut.\n\nSimpulan Konten:\n${newContent.length > 200 ? newContent.substring(0, 200) + '...' : newContent}''',
+              _formatSummary(newContent),
               link.url,
             );
           }
@@ -99,6 +126,11 @@ class BackgroundService {
         "1",
         backgroundTaskKey,
         frequency: const Duration(minutes: 15),
+        initialDelay: const Duration(minutes: 15),
+        constraints: Constraints(
+          networkType: NetworkType.connected, // Only run checking when online
+          requiresBatteryNotLow: true, // Auto-skip checking when on low battery
+        ),
       );
 
       // Foreground active loop for instant test/updates while app is open

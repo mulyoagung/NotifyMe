@@ -1,7 +1,9 @@
 import 'dart:io';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:local_notifier/local_notifier.dart';
+import 'package:flutter/material.dart';
+import '../main.dart';
+import '../screens/detail_screen.dart';
 import 'database_helper.dart';
 
 @pragma('vm:entry-point')
@@ -14,37 +16,40 @@ void notificationTapBackground(
 
   final id = int.tryParse(parts[0]);
   if (id == null) return;
-  
-  final url = parts.length > 1 ? parts.sublist(1).join('|') : '';
 
   // Cancel/Clear the notification
   await FlutterLocalNotificationsPlugin().cancel(id);
 
-  if (notificationResponse.actionId == 'baca' || notificationResponse.actionId == null) {
-    // Action 'Baca' or tap on the main body
+  if (notificationResponse.actionId == 'baca_link' ||
+      notificationResponse.actionId == null) {
+    // Action 'Buka Link' or tap on the main body
     final link = await DatabaseHelper.instance.readLink(id);
     if (link != null) {
       link.hasUpdate = false;
       await DatabaseHelper.instance.update(link);
-    }
-    // Launch the URL
-    if (url.isNotEmpty) {
-      final uri = Uri.parse(url);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
+
+      // Open screen using app's main navigator Key
+      if (navigatorKey.currentState != null) {
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(builder: (_) => DetailScreen(link: link)),
+        );
+      } else {
+        NotificationService.pendingRouteLinkId = id;
       }
     }
-  } else if (notificationResponse.actionId == 'baca_nanti') {
-    // Action 'Baca Nanti' (read later/snooze)
+  } else if (notificationResponse.actionId == 'baca') {
+    // Action 'Tandai Dibaca'
     final link = await DatabaseHelper.instance.readLink(id);
     if (link != null) {
-      link.hasUpdate = true;
+      link.hasUpdate = false;
       await DatabaseHelper.instance.update(link);
     }
   }
 }
 
 class NotificationService {
+  static int? pendingRouteLinkId;
+
   static final NotificationService instance = NotificationService._init();
   final FlutterLocalNotificationsPlugin _flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
@@ -100,14 +105,45 @@ class NotificationService {
       );
 
       notification.onShow = () {};
-      notification.onClick = () {
-        // Handle click action
+      notification.onClick = () async {
+        // Handle click action (Default Open Link)
+        final link = await DatabaseHelper.instance.readLink(id);
+        if (link != null) {
+          link.hasUpdate = false;
+          await DatabaseHelper.instance.update(link);
+
+          if (navigatorKey.currentState != null) {
+            navigatorKey.currentState?.push(
+              MaterialPageRoute(builder: (_) => DetailScreen(link: link)),
+            );
+          } else {
+            NotificationService.pendingRouteLinkId = id;
+          }
+        }
       };
-      notification.onClickAction = (actionIndex) {
+      notification.onClickAction = (actionIndex) async {
         if (actionIndex == 0) {
           // Open url
+          final link = await DatabaseHelper.instance.readLink(id);
+          if (link != null) {
+            link.hasUpdate = false;
+            await DatabaseHelper.instance.update(link);
+
+            if (navigatorKey.currentState != null) {
+              navigatorKey.currentState?.push(
+                MaterialPageRoute(builder: (_) => DetailScreen(link: link)),
+              );
+            } else {
+              NotificationService.pendingRouteLinkId = id;
+            }
+          }
         } else if (actionIndex == 1) {
           // Mark as read
+          final link = await DatabaseHelper.instance.readLink(id);
+          if (link != null) {
+            link.hasUpdate = false;
+            await DatabaseHelper.instance.update(link);
+          }
         }
       };
 
@@ -127,10 +163,10 @@ class NotificationService {
                 summaryText: url,
               ),
               actions: [
-            const AndroidNotificationAction('baca', 'Baca',
-                showsUserInterface: false),
-            const AndroidNotificationAction('baca_nanti', 'Baca Nanti',
-                showsUserInterface: false),
+            const AndroidNotificationAction('baca_link', 'Buka Link',
+                showsUserInterface: true, cancelNotification: true),
+            const AndroidNotificationAction('baca', 'Tandai Dibaca',
+                showsUserInterface: false, cancelNotification: true),
           ]);
 
       NotificationDetails platformChannelSpecifics =

@@ -8,6 +8,7 @@ class MonitoredLink {
   DateTime lastCheckedAt;
   bool hasUpdate;
   String lastSnapshot;
+  String previousSnapshot;
 
   MonitoredLink({
     this.id,
@@ -19,6 +20,7 @@ class MonitoredLink {
     required this.lastCheckedAt,
     this.hasUpdate = false,
     this.lastSnapshot = '',
+    this.previousSnapshot = '',
   });
 
   Map<String, dynamic> toMap() {
@@ -32,6 +34,7 @@ class MonitoredLink {
       'lastCheckedAt': lastCheckedAt.toIso8601String(),
       'hasUpdate': hasUpdate ? 1 : 0,
       'lastSnapshot': lastSnapshot,
+      'previousSnapshot': previousSnapshot,
     };
   }
 
@@ -46,6 +49,7 @@ class MonitoredLink {
       lastCheckedAt: DateTime.parse(map['lastCheckedAt']),
       hasUpdate: map['hasUpdate'] == 1,
       lastSnapshot: map['lastSnapshot'] ?? '',
+      previousSnapshot: map['previousSnapshot'] ?? '',
     );
   }
 }

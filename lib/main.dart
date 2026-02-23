@@ -6,6 +6,10 @@ import 'screens/settings_screen.dart';
 import 'theme.dart';
 import 'services/background_service.dart';
 import 'services/notification_service.dart';
+import 'services/database_helper.dart';
+import 'screens/detail_screen.dart';
+
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,6 +26,7 @@ class NotifyMeApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey,
       title: 'NotifyMe',
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
@@ -47,6 +52,22 @@ class _MainNavigationState extends State<MainNavigation> {
     const VercelDashboardScreen(),
     const SettingsScreen(),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (NotificationService.pendingRouteLinkId != null) {
+        final link = await DatabaseHelper.instance
+            .readLink(NotificationService.pendingRouteLinkId!);
+        NotificationService.pendingRouteLinkId = null;
+        if (link != null) {
+          navigatorKey.currentState?.push(
+              MaterialPageRoute(builder: (_) => DetailScreen(link: link)));
+        }
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {

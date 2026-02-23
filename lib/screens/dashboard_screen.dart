@@ -284,12 +284,18 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Widget _buildMobileListView(List<MonitoredLink> itemLinks, bool isDark) {
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: itemLinks.length,
-      itemBuilder: (context, index) {
-        return _buildMobileMonitorCard(itemLinks[index], isDark);
-      },
+    return RefreshIndicator(
+      onRefresh: _loadLinks,
+      color: AppTheme.primaryColor,
+      backgroundColor: isDark ? AppTheme.cardDark : Colors.white,
+      child: ListView.builder(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(16),
+        itemCount: itemLinks.length,
+        itemBuilder: (context, index) {
+          return _buildMobileMonitorCard(itemLinks[index], isDark);
+        },
+      ),
     );
   }
 
