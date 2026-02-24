@@ -729,6 +729,14 @@ class _AddEditLinkScreenState extends State<AddEditLinkScreen> {
                                 selected['url']!.toString().isNotEmpty) {
                               _urlController.text = selected['url']!;
                             }
+                            // Auto-fill pre-navigation script if recorder was used
+                            if (selected['preNavigationScript'] != null &&
+                                selected['preNavigationScript']
+                                    .toString()
+                                    .isNotEmpty) {
+                              _preNavScriptController.text =
+                                  selected['preNavigationScript']!;
+                            }
                           });
                         }
                       },
