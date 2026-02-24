@@ -9,6 +9,8 @@ class MonitoredLink {
   bool hasUpdate;
   String lastSnapshot;
   String previousSnapshot;
+  String
+      preNavigationScript; // Optional JS to run before scraping (e.g. click a menu)
 
   MonitoredLink({
     this.id,
@@ -21,6 +23,7 @@ class MonitoredLink {
     this.hasUpdate = false,
     this.lastSnapshot = '',
     this.previousSnapshot = '',
+    this.preNavigationScript = '',
   });
 
   Map<String, dynamic> toMap() {
@@ -35,6 +38,7 @@ class MonitoredLink {
       'hasUpdate': hasUpdate ? 1 : 0,
       'lastSnapshot': lastSnapshot,
       'previousSnapshot': previousSnapshot,
+      'preNavigationScript': preNavigationScript,
     };
   }
 
@@ -50,6 +54,7 @@ class MonitoredLink {
       hasUpdate: map['hasUpdate'] == 1,
       lastSnapshot: map['lastSnapshot'] ?? '',
       previousSnapshot: map['previousSnapshot'] ?? '',
+      preNavigationScript: map['preNavigationScript'] ?? '',
     );
   }
 }

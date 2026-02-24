@@ -34,12 +34,16 @@ class DatabaseHelper {
     return await databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 2,
+        version: 3,
         onCreate: _createDB,
         onUpgrade: (db, oldVersion, newVersion) async {
           if (oldVersion < 2) {
             await db.execute(
                 "ALTER TABLE links ADD COLUMN previousSnapshot TEXT DEFAULT ''");
+          }
+          if (oldVersion < 3) {
+            await db.execute(
+                "ALTER TABLE links ADD COLUMN preNavigationScript TEXT DEFAULT ''");
           }
         },
       ),
@@ -64,7 +68,8 @@ CREATE TABLE links (
   lastCheckedAt $textType,
   hasUpdate $boolType,
   lastSnapshot $textTypeNull,
-  previousSnapshot $textTypeNull
+  previousSnapshot $textTypeNull,
+  preNavigationScript $textTypeNull
   )
 ''');
   }
@@ -90,7 +95,8 @@ CREATE TABLE links (
         'lastCheckedAt',
         'hasUpdate',
         'lastSnapshot',
-        'previousSnapshot'
+        'previousSnapshot',
+        'preNavigationScript'
       ],
       where: 'id = ?',
       whereArgs: [id],

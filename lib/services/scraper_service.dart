@@ -16,12 +16,14 @@ class ScraperService {
         initialUrlRequest: URLRequest(url: WebUri(link.url)),
         initialSettings: InAppWebViewSettings(
           javaScriptEnabled: true,
-          loadsImagesAutomatically: false, // WAJIB: Biar gak download gambar
+          loadsImagesAutomatically: false,
           mediaPlaybackRequiresUserGesture: true,
           disableDefaultErrorPage: true,
           useShouldInterceptRequest: true,
+          // Keep cookies (session) alive – do NOT clear cache + cookies together
           cacheEnabled: false,
-          clearCache: true,
+          clearCache:
+              false, // IMPORTANT: false = cookies are preserved between sessions
           disableContextMenu: true,
           preferredContentMode: UserPreferredContentMode.MOBILE,
           useOnNavigationResponse: true,
@@ -52,6 +54,15 @@ class ScraperService {
             String extractedText = '';
 
             if (link.cssSelector.isNotEmpty) {
+              // Step 1: Run pre-navigation JS (if user configured it)
+              // This allows clicking a menu item or navigating to hidden content
+              if (link.preNavigationScript.isNotEmpty) {
+                await controller.evaluateJavascript(
+                    source: link.preNavigationScript);
+                // Allow time for navigation/click to settle
+                await Future.delayed(const Duration(milliseconds: 800));
+              }
+
               final jsResult = await controller.evaluateJavascript(source: '''
                 function checkDOM() {
                   return new Promise((resolve) => {

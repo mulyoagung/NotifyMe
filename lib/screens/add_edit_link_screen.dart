@@ -21,6 +21,7 @@ class _AddEditLinkScreenState extends State<AddEditLinkScreen> {
   late TextEditingController _nameController;
   late TextEditingController _urlController;
   late TextEditingController _cssSelectorController;
+  late TextEditingController _preNavScriptController;
   int _intervalMinutes = 5;
   bool _isActive = true;
   bool _isDesktop = false;
@@ -38,6 +39,9 @@ class _AddEditLinkScreenState extends State<AddEditLinkScreen> {
     _urlController = TextEditingController(text: widget.link?.url ?? '');
     _cssSelectorController = TextEditingController(
       text: widget.link?.cssSelector ?? '',
+    );
+    _preNavScriptController = TextEditingController(
+      text: widget.link?.preNavigationScript ?? '',
     );
     if (widget.link != null) {
       _intervalMinutes = widget.link!.intervalMinutes;
@@ -92,6 +96,7 @@ class _AddEditLinkScreenState extends State<AddEditLinkScreen> {
     _nameController.dispose();
     _urlController.dispose();
     _cssSelectorController.dispose();
+    _preNavScriptController.dispose();
     super.dispose();
   }
 
@@ -103,6 +108,7 @@ class _AddEditLinkScreenState extends State<AddEditLinkScreen> {
           name: _nameController.text,
           url: _urlController.text,
           cssSelector: _cssSelectorController.text,
+          preNavigationScript: _preNavScriptController.text,
           intervalMinutes: _intervalMinutes,
           isActive: _isActive,
           lastCheckedAt: DateTime.now(),
@@ -114,6 +120,7 @@ class _AddEditLinkScreenState extends State<AddEditLinkScreen> {
           ..name = _nameController.text
           ..url = _urlController.text
           ..cssSelector = _cssSelectorController.text
+          ..preNavigationScript = _preNavScriptController.text
           ..intervalMinutes = _intervalMinutes
           ..isActive = _isActive;
         await DatabaseHelper.instance.update(updatedLink);
@@ -873,7 +880,43 @@ class _AddEditLinkScreenState extends State<AddEditLinkScreen> {
             ),
           ),
 
-          const SizedBox(height: 32),
+          const SizedBox(height: 16),
+
+          // Advanced: Pre-Navigation Script
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: EdgeInsets.zero,
+            leading:
+                const Icon(Icons.code, color: AppTheme.primaryColor, size: 20),
+            title: const Text(
+              'Pre-Navigation Script (Opsional)',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+            subtitle: const Text(
+              'JS yang dijalankan sebelum scraping. Berguna untuk klik menu, login otomatis, dll.',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            children: [
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _preNavScriptController,
+                maxLines: 5,
+                keyboardType: TextInputType.multiline,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+                decoration: InputDecoration(
+                  hintText:
+                      "// Contoh: klik menu laporan\ndocument.querySelector('.nav-laporan').click();",
+                  hintStyle: const TextStyle(fontSize: 11, color: Colors.grey),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  filled: true,
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+
+          const SizedBox(height: 24),
           SizedBox(
             width: double.infinity,
             child: FilledButton(
