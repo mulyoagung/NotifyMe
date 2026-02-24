@@ -31,11 +31,11 @@ void callbackDispatcher() {
 String _formatSummary(String content) {
   try {
     final List<dynamic> list = dart_convert.jsonDecode(content);
-    if (list.isEmpty) return 'Tidak ada text.';
-    // Take first 3 new texts and join them naturally without JSON brackets
-    return list.take(3).join('\n\n');
+    if (list.isEmpty) return 'Tidak ada konten baru.';
+    // Show first 3 new strings naturally separated
+    return list.take(3).map((e) => '• $e').join('\n');
   } catch (_) {
-    return content.length > 200 ? content.substring(0, 200) + '...' : content;
+    return content.length > 200 ? '${content.substring(0, 200)}...' : content;
   }
 }
 

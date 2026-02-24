@@ -27,7 +27,7 @@ class _AddEditLinkScreenState extends State<AddEditLinkScreen> {
 
   late final WebViewController _controller;
   bool _isLoading = true;
-  bool _isWebViewSupported = !kIsWeb &&
+  bool _isWebViewSupported = kIsWeb ||
       (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS);
 
@@ -45,15 +45,22 @@ class _AddEditLinkScreenState extends State<AddEditLinkScreen> {
     }
 
     if (_isWebViewSupported) {
-      _controller = WebViewController()
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setNavigationDelegate(
+      _controller = WebViewController();
+      if (!kIsWeb) {
+        _controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+        _controller.setNavigationDelegate(
           NavigationDelegate(
             onPageFinished: (String url) {
               if (mounted) setState(() => _isLoading = false);
             },
           ),
         );
+      } else {
+        // on web we just consider it loaded almost immediately because NavigationDelegate is not supported
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) setState(() => _isLoading = false);
+        });
+      }
     } else {
       _isLoading = false;
     }
@@ -617,7 +624,7 @@ class _AddEditLinkScreenState extends State<AddEditLinkScreen> {
                         Expanded(
                           child: Stack(
                             children: [
-                              _isWebViewSupported
+                              (!kIsWeb && _isWebViewSupported)
                                   ? WebViewWidget(controller: _controller)
                                   : _buildMockWebView(isDark),
                               if (_isLoading && _urlController.text.isNotEmpty)
@@ -707,9 +714,14 @@ class _AddEditLinkScreenState extends State<AddEditLinkScreen> {
                                 VisualSelectorScreen(url: _urlController.text),
                           ),
                         );
-                        if (selected != null) {
+                        if (selected != null && selected is Map) {
                           setState(() {
-                            _cssSelectorController.text = selected;
+                            _cssSelectorController.text =
+                                selected['selector'] ?? '';
+                            if (selected['url'] != null &&
+                                selected['url']!.toString().isNotEmpty) {
+                              _urlController.text = selected['url']!;
+                            }
                           });
                         }
                       },
@@ -831,9 +843,13 @@ class _AddEditLinkScreenState extends State<AddEditLinkScreen> {
                         VisualSelectorScreen(url: _urlController.text),
                   ),
                 );
-                if (selected != null) {
+                if (selected != null && selected is Map) {
                   setState(() {
-                    _cssSelectorController.text = selected;
+                    _cssSelectorController.text = selected['selector'] ?? '';
+                    if (selected['url'] != null &&
+                        selected['url']!.toString().isNotEmpty) {
+                      _urlController.text = selected['url']!;
+                    }
                   });
                 }
               },

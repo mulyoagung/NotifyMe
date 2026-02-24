@@ -1,6 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
-import 'dart:convert';
+import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:diff_match_patch/diff_match_patch.dart';
 import '../models/monitored_link.dart';
@@ -50,34 +51,55 @@ class _DetailScreenState extends State<DetailScreen> {
                       var nodes = document.querySelectorAll(selector);
                       if (nodes.length === 0) return;
                       
-                      var isContainer = (nodes.length === 1 && nodes[0].children && nodes[0].children.length > 0);
-                      var itemsToCheck = isContainer ? nodes[0].children : nodes;
-                      
                       var oldItems = $oldItemsStr;
+                      var newLines = [];
+                      
+                      // 1. Compute which text lines are brand new
+                      for (var i = 0; i < nodes.length; i++) {
+                        if (nodes[i].innerText) {
+                          var lines = nodes[i].innerText.split('\\n');
+                          for (var j = 0; j < lines.length; j++) {
+                            var text = lines[j].trim();
+                            if (text.length > 0) {
+                              if (oldItems && oldItems.length > 0) {
+                                if (oldItems.indexOf(text) === -1 && newLines.indexOf(text) === -1) {
+                                  newLines.push(text);
+                                }
+                              } else {
+                                if (newLines.indexOf(text) === -1) newLines.push(text);
+                              }
+                            }
+                          }
+                        }
+                      }
+                      
                       var firstNew = null;
                       
-                      for (var i = 0; i < itemsToCheck.length; i++) {
-                        var child = itemsToCheck[i];
-                        var text = child.innerText ? child.innerText.trim() : '';
-                        if (text.length === 0) continue;
+                      // 2. Find and highlight the deepest DOM element that renders each new line
+                      for (var i = 0; i < nodes.length; i++) {
+                        var root = nodes[i];
+                        // Reverse array to check deepest children first
+                        var allEls = Array.from(root.querySelectorAll('*')).reverse();
                         
-                        var isNew = false;
-                        if (oldItems && oldItems.length > 0) {
-                          isNew = oldItems.indexOf(text) === -1;
-                        } else {
-                          isNew = true;
-                        }
-                        
-                        if (isNew) {
-                          // Try to highlight the box itself instead of the entire container segment.
-                          child.style.outline = '4px solid #00F4B1';
-                          child.style.backgroundColor = 'rgba(0, 244, 177, 0.3)';
-                          child.style.transition = 'all 0.3s ease';
-                          
-                          if (!firstNew) {
-                            firstNew = child;
-                            child.scrollIntoView({behavior: 'smooth', block: 'center'});
-                          }
+                        for (var k = 0; k < newLines.length; k++) {
+                           var line = newLines[k];
+                           for (var j = 0; j < allEls.length; j++) {
+                              var el = allEls[j];
+                              
+                              if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE') continue;
+                              
+                              if (el.innerText && el.innerText.indexOf(line) !== -1) {
+                                  el.style.outline = '4px solid #00F4B1';
+                                  el.style.backgroundColor = 'rgba(0, 244, 177, 0.3)';
+                                  el.style.transition = 'all 0.3s ease';
+                                  
+                                  if (!firstNew) {
+                                    firstNew = el;
+                                    el.scrollIntoView({behavior: 'smooth', block: 'center'});
+                                  }
+                                  break; // Deepest element found for this line, go to next line
+                              }
+                           }
                         }
                       }
                     }, 1000);
@@ -123,9 +145,8 @@ class _DetailScreenState extends State<DetailScreen> {
     try {
       final List<dynamic> list = jsonDecode(jsonString);
       if (list.isEmpty) return 'Array kosong (Tidak ada text).';
-      return list.map((item) => '- \$item').join('\\n\\n');
+      return list.map((item) => '• $item').join('\n\n');
     } catch (_) {
-      // Fallback in case of raw text (old data format)
       return jsonString;
     }
   }
@@ -177,7 +198,17 @@ class _DetailScreenState extends State<DetailScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.share, size: 22),
-            onPressed: () {},
+            tooltip: 'Salin URL',
+            onPressed: () {
+              final urlText = widget.link.url;
+              Clipboard.setData(ClipboardData(text: urlText));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('URL disalin ke clipboard'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
           ),
         ],
       ),

@@ -109,8 +109,8 @@ class _DashboardScreenState extends State<DashboardScreen>
             child: BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
               child: Container(
-                height: 64,
-                padding: const EdgeInsets.symmetric(horizontal: 32),
+                height: 72,
+                padding: const EdgeInsets.symmetric(horizontal: 24),
                 decoration: BoxDecoration(
                   color: isDark
                       ? const Color(0xFF0A0F0D).withOpacity(0.5)
@@ -135,7 +135,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     Row(
                       children: [
                         Container(
-                          width: 256,
+                          width: 200,
                           height: 36,
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           decoration: BoxDecoration(
@@ -162,7 +162,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                                           ? Colors.white
                                           : Colors.black87),
                                   decoration: InputDecoration(
-                                    hintText: 'Search monitors...',
+                                    hintText: 'Search...',
                                     hintStyle: TextStyle(
                                         color: Colors.grey.shade500,
                                         fontSize: 13),
@@ -174,13 +174,12 @@ class _DashboardScreenState extends State<DashboardScreen>
                             ],
                           ),
                         ),
-                        const SizedBox(width: 16),
+                        const SizedBox(width: 12),
                         FilledButton.icon(
                           onPressed: () => _navigateToAddEdit(),
                           style: FilledButton.styleFrom(
                             backgroundColor: AppTheme.primaryColor,
-                            foregroundColor:
-                                const Color(0xFF0A0F0D), // dark background
+                            foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 16, vertical: 12),
                             shape: RoundedRectangleBorder(
@@ -188,8 +187,8 @@ class _DashboardScreenState extends State<DashboardScreen>
                             elevation: 8,
                             shadowColor: AppTheme.primaryColor.withOpacity(0.4),
                           ),
-                          icon: const Icon(Icons.add, size: 20),
-                          label: const Text('Add Website',
+                          icon: const Icon(Icons.add, size: 18),
+                          label: const Text('Add Item',
                               style: TextStyle(fontWeight: FontWeight.bold)),
                         ),
                       ],
@@ -400,17 +399,14 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Widget _buildGridView(bool isDark) {
-    double screenWidth = MediaQuery.of(context).size.width;
-    int crossAxisCount = screenWidth > 1400 ? 3 : (screenWidth > 1024 ? 2 : 1);
-
     final filteredLinks = _getFilteredLinks(links);
 
     return GridView.builder(
       physics: const NeverScrollableScrollPhysics(),
       shrinkWrap: true,
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: crossAxisCount,
-        childAspectRatio: 1.3, // Adjust card proportion
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 450,
+        mainAxisExtent: 220, // Fixed height avoids aspect ratio squash
         crossAxisSpacing: 24,
         mainAxisSpacing: 24,
       ),

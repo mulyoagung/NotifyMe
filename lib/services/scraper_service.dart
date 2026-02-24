@@ -61,14 +61,8 @@ class ScraperService {
                       
                       // Wait until we have some valid innerText content length from the nodes
                       var hasContent = false;
-                      if (nodes.length === 1 && nodes[0].children && nodes[0].children.length > 0) {
-                         for (var i = 0; i < nodes[0].children.length; i++) {
-                            if (nodes[0].children[i].innerText.trim().length > 0) hasContent = true;
-                         }
-                      } else if (nodes.length > 0) {
-                         for (var i = 0; i < nodes.length; i++) {
-                            if (nodes[i].innerText.trim().length > 0) hasContent = true;
-                         }
+                      for (var i = 0; i < nodes.length; i++) {
+                         if (nodes[i].innerText && nodes[i].innerText.trim().length > 0) hasContent = true;
                       }
                       
                       attempts++;
@@ -77,16 +71,13 @@ class ScraperService {
                         clearInterval(interval);
                         
                         var items = [];
-                        if (nodes.length === 1 && nodes[0].children && nodes[0].children.length > 0) {
-                          var children = nodes[0].children;
-                          for (var i = 0; i < children.length; i++) {
-                            var val = children[i].innerText.trim();
-                            if (val.length > 0) items.push(val);
-                          }
-                        } else if (nodes.length > 0) {
-                          for (var i = 0; i < nodes.length; i++) {
-                            var val = nodes[i].innerText.trim();
-                            if (val.length > 0) items.push(val);
+                        for (var i = 0; i < nodes.length; i++) {
+                          if (nodes[i].innerText) {
+                            var lines = nodes[i].innerText.split('\\n');
+                            for (var j = 0; j < lines.length; j++) {
+                              var val = lines[j].trim();
+                              if (val.length > 0) items.push(val);
+                            }
                           }
                         }
                         
@@ -101,11 +92,29 @@ class ScraperService {
 
               extractedText = jsResult?.toString().trim() ?? '[]';
             } else {
-              // Fallback to body text
-              await Future.delayed(const Duration(seconds: 2));
-              final jsResult = await controller.evaluateJavascript(
-                  source:
-                      "document.body ? JSON.stringify([document.body.innerText.trim()]) : '[]'");
+              // Fallback: smart poll body text (no fixed delay)
+              final jsResult = await controller.evaluateJavascript(source: '''
+                function checkBody() {
+                  return new Promise((resolve) => {
+                    let attempts = 0;
+                    const interval = setInterval(() => {
+                      attempts++;
+                      var body = document.body;
+                      if ((body && body.innerText && body.innerText.trim().length > 0) || attempts > 15) {
+                        clearInterval(interval);
+                        var lines = body ? body.innerText.split('\\n') : [];
+                        var items = [];
+                        for (var i = 0; i < lines.length; i++) {
+                          var val = lines[i].trim();
+                          if (val.length > 0) items.push(val);
+                        }
+                        resolve(JSON.stringify(items));
+                      }
+                    }, 200);
+                  });
+                }
+                checkBody();
+              ''');
               extractedText = jsResult?.toString().trim() ?? '[]';
             }
 

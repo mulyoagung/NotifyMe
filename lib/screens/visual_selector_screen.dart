@@ -15,72 +15,102 @@ class VisualSelectorScreen extends StatefulWidget {
 
 class _VisualSelectorScreenState extends State<VisualSelectorScreen> {
   late final WebViewController _controller;
-  final _windowsController = win_web.WebviewController();
+  late final win_web.WebviewController _windowsController;
   bool _isLoading = true;
   String _currentSelector = '';
+  String _currentUrl = '';
   bool _isWindowsInitError = false;
   bool _isSelectionMode = false;
 
   final String _selectionScript = '''
     window.NotifyMeSelectionEnabled = true;
-    (function() {
-      var prevStyle = null;
-      var prevElement = null;
+    window.NotifyMeActiveElement = null;
 
-      function getCssSelector(el) {
-        if (!(el instanceof Element)) return;
-        var path = [];
-        while (el.nodeType === Node.ELEMENT_NODE) {
-          var selector = el.nodeName.toLowerCase();
-          if (el.id) {
-            selector += '#' + el.id;
-            path.unshift(selector);
-            break;
-          } else {
-            var sib = el, nth = 1;
-            while (sib = sib.previousElementSibling) {
-              if (sib.nodeName.toLowerCase() == selector)
-                nth++;
-            }
-            if (nth != 1)
-              selector += ":nth-of-type("+nth+")";
-          }
-          path.unshift(selector);
-          el = el.parentNode;
-        }
-        return path.join(" > ");
+    window.NotifyMeHighlight = function(el) {
+      if (!el) return;
+      if (window.NotifyMeActiveElement) {
+        window.NotifyMeActiveElement.style.outline = window.NotifyMePrevStyle || '';
+        window.NotifyMeActiveElement.style.backgroundColor = '';
       }
+      window.NotifyMePrevStyle = el.style.outline;
+      window.NotifyMeActiveElement = el;
+      el.style.outline = '3px solid #00F4B1';
+      el.style.backgroundColor = 'rgba(0, 244, 177, 0.2)';
+      var selector = getCssSelector(el);
+      SelectorChannel.postMessage(selector);
+    };
 
-      document.body.addEventListener('mousemove', function(e) {
-        if (!window.NotifyMeSelectionEnabled) return;
-        if (prevElement) {
-          prevElement.style.outline = prevStyle;
-          prevElement.style.backgroundColor = '';
-        }
-        var el = e.target;
-        prevStyle = el.style.outline;
-        prevElement = el;
-        el.style.outline = '3px solid #00F4B1';
-        el.style.backgroundColor = 'rgba(0, 244, 177, 0.2)';
-      });
+    window.NotifyMeExpand = function() {
+      if (window.NotifyMeActiveElement && window.NotifyMeActiveElement.parentElement && window.NotifyMeActiveElement.parentElement !== document.body) {
+        window.NotifyMeHighlight(window.NotifyMeActiveElement.parentElement);
+      }
+    };
 
-      document.body.addEventListener('click', function(e) {
-        if (!window.NotifyMeSelectionEnabled) return;
-        e.preventDefault();
-        e.stopPropagation();
-        if (prevElement) {
-          prevElement.style.outline = prevStyle;
-          prevElement.style.backgroundColor = '';
-          prevElement = null;
-          prevStyle = null;
+    window.NotifyMeShrink = function() {
+      if (window.NotifyMeActiveElement && window.NotifyMeActiveElement.firstElementChild) {
+        window.NotifyMeHighlight(window.NotifyMeActiveElement.firstElementChild);
+      }
+    };
+
+    function getCssSelector(el) {
+      if (!(el instanceof Element)) return '';
+      var path = [];
+      while (el.nodeType === Node.ELEMENT_NODE && el.tagName.toLowerCase() !== 'html') {
+        var selector = el.nodeName.toLowerCase();
+        if (el.id && /^[a-zA-Z0-9\\-_]+\$/.test(el.id)) {
+          selector += '#' + el.id;
+          path.unshift(selector);
+          break;
+        } else {
+          var sib = el.previousElementSibling, nth = 1;
+          while (sib) {
+            nth++;
+            sib = sib.previousElementSibling;
+          }
+          
+          if (el.className && typeof el.className === 'string' && selector !== 'body' && selector !== 'html') {
+             var classes = el.className.trim().split(/\\s+/);
+             var validClass = classes.find(c => /^[a-zA-Z0-9\\-_]+\$/.test(c) && !c.includes('__') && !c.startsWith('inter_') && c.length < 30);
+             if (validClass) {
+               selector += '.' + validClass;
+             }
+          }
+          
+          if (nth != 1) selector += ":nth-child("+nth+")";
         }
-        var selector = getCssSelector(e.target);
-        SelectorChannel.postMessage(selector);
-      }, true);
-    })();
+        path.unshift(selector);
+        el = el.parentNode;
+      }
+      return path.join(" > ");
+    }
+
+    document.body.addEventListener('mousemove', function(e) {
+      if (!window.NotifyMeSelectionEnabled) return;
+      if (window.NotifyMeHoverElement) {
+        window.NotifyMeHoverElement.style.outline = window.NotifyMeHoverPrevStyle || '';
+        window.NotifyMeHoverElement.style.backgroundColor = '';
+      }
+      var el = e.target;
+      window.NotifyMeHoverPrevStyle = el.style.outline;
+      window.NotifyMeHoverElement = el;
+      el.style.outline = '2px dashed #00F4B1';
+      el.style.backgroundColor = 'rgba(0, 244, 177, 0.1)';
+    });
+
+    document.body.addEventListener('click', function(e) {
+      if (!window.NotifyMeSelectionEnabled) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (window.NotifyMeHoverElement) {
+        window.NotifyMeHoverElement.style.outline = window.NotifyMeHoverPrevStyle || '';
+        window.NotifyMeHoverElement.style.backgroundColor = '';
+        window.NotifyMeHoverElement = null;
+      }
+      window.NotifyMeHighlight(e.target);
+    }, true);
   ''';
 
-  bool _isWebViewSupported = !kIsWeb &&
+  bool _isWebViewSupported = kIsWeb ||
       (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS ||
           defaultTargetPlatform == TargetPlatform.windows);
@@ -97,28 +127,44 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen> {
     if (_isWindows) {
       _initWindowsWebview(targetUrl);
     } else if (_isWebViewSupported) {
-      _controller = WebViewController()
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..addJavaScriptChannel(
+      _controller = WebViewController();
+      if (!kIsWeb) {
+        _controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+        _controller.addJavaScriptChannel(
           'SelectorChannel',
           onMessageReceived: (message) {
             setState(() {
               _currentSelector = message.message;
             });
           },
-        )
-        ..setNavigationDelegate(
+        );
+        _controller.setNavigationDelegate(
           NavigationDelegate(
             onPageFinished: (String url) {
               if (mounted) {
-                setState(() => _isLoading = false);
-                _controller.runJavaScript(_selectionScript);
-                _updateSelectionMode(_isSelectionMode);
+                setState(() {
+                  _isLoading = false;
+                  _currentUrl = url;
+                });
+                if (!kIsWeb) {
+                  _controller.runJavaScript(_selectionScript);
+                  _updateSelectionMode(_isSelectionMode);
+                }
               }
             },
           ),
-        )
-        ..loadRequest(Uri.parse(targetUrl));
+        );
+      } else {
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            setState(() {
+              _isLoading = false;
+              _currentUrl = targetUrl;
+            });
+          }
+        });
+      }
+      _controller.loadRequest(Uri.parse(targetUrl));
     } else {
       _isLoading = false;
     }
@@ -126,8 +172,11 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen> {
 
   Future<void> _initWindowsWebview(String targetUrl) async {
     try {
+      _windowsController = win_web.WebviewController();
       await _windowsController.initialize();
-      _windowsController.url.listen((url) {});
+      _windowsController.url.listen((url) {
+        if (mounted) setState(() => _currentUrl = url);
+      });
 
       await _windowsController.loadUrl(targetUrl);
 
@@ -161,7 +210,10 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen> {
   }
 
   void _confirmSelection() {
-    Navigator.pop(context, _currentSelector);
+    Navigator.pop(context, {
+      'selector': _currentSelector,
+      'url': _currentUrl.isNotEmpty ? _currentUrl : widget.url,
+    });
   }
 
   void _updateSelectionMode(bool enable) {
@@ -172,7 +224,7 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen> {
         _windowsController.executeScript(script);
       }
     } else {
-      _controller.runJavaScript(script);
+      if (!kIsWeb) _controller.runJavaScript(script);
     }
   }
 
@@ -181,6 +233,22 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen> {
       _isSelectionMode = !_isSelectionMode;
       _updateSelectionMode(_isSelectionMode);
     });
+  }
+
+  void _expandSelection() {
+    if (_isWindows) {
+      _windowsController.executeScript('window.NotifyMeExpand()');
+    } else {
+      if (!kIsWeb) _controller.runJavaScript('window.NotifyMeExpand()');
+    }
+  }
+
+  void _shrinkSelection() {
+    if (_isWindows) {
+      _windowsController.executeScript('window.NotifyMeShrink()');
+    } else {
+      if (!kIsWeb) _controller.runJavaScript('window.NotifyMeShrink()');
+    }
   }
 
   @override
@@ -230,6 +298,20 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen> {
                         fontSize: 12,
                       ),
                     ),
+                  ),
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.arrow_upward, size: 18),
+                        onPressed: _expandSelection,
+                        tooltip: 'Pilih Induk (Perluas)',
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.arrow_downward, size: 18),
+                        onPressed: _shrinkSelection,
+                        tooltip: 'Pilih Anak (Persempit)',
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -281,7 +363,9 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen> {
                           ? (_windowsController.value.isInitialized
                               ? win_web.Webview(_windowsController)
                               : const SizedBox())
-                          : WebViewWidget(controller: _controller),
+                          : (!kIsWeb
+                              ? WebViewWidget(controller: _controller)
+                              : const SizedBox()),
                       if (_isLoading)
                         const Center(
                           child: CircularProgressIndicator(
@@ -308,10 +392,10 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen> {
                               ],
                             ),
                             child: const Text(
-                              'Tap elemen di halaman web untuk memantau bagian tersebut.',
+                              'Tap elemen di halaman web untuk memantau bagian tersebut.\nGunakan mode seleksi hanya saat halaman/tabel telah termuat sepenuhnya.\n(Catatan: Pengecekan latar belakang tidak mendukung fungsi Login di WebView ini.)',
                               style: TextStyle(
                                 color: Colors.white,
-                                fontSize: 13,
+                                fontSize: 12,
                               ),
                               textAlign: TextAlign.center,
                             ),

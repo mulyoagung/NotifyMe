@@ -13,28 +13,54 @@ class VercelDashboardScreen extends StatefulWidget {
 class _VercelDashboardScreenState extends State<VercelDashboardScreen> {
   late final WebViewController _controller;
   bool _isLoading = true;
-  bool _isWebViewSupported = !kIsWeb &&
+  final bool _isWebViewSupported = kIsWeb ||
       (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS);
+
+  final String _tweakScript = '''
+    const style = document.createElement('style');
+    style.innerHTML = `
+      .sidebar { display: none !important; }
+      body { padding-left: 0 !important; }
+      .mobile-menu-btn { display: none !important; }
+    `;
+    document.head.appendChild(style);
+  ''';
 
   @override
   void initState() {
     super.initState();
     if (_isWebViewSupported) {
-      _controller = WebViewController()
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setNavigationDelegate(
+      _controller = WebViewController();
+
+      if (!kIsWeb) {
+        _controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+        _controller.setNavigationDelegate(
           NavigationDelegate(
             onPageFinished: (String url) {
               if (mounted) {
                 setState(() {
                   _isLoading = false;
                 });
+                if (!kIsWeb) {
+                  _controller.runJavaScript(_tweakScript);
+                }
               }
             },
           ),
-        )
-        ..loadRequest(Uri.parse('https://mailin-univet.vercel.app/dashboard'));
+        );
+      } else {
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            setState(() {
+              _isLoading = false;
+            });
+          }
+        });
+      }
+
+      _controller
+          .loadRequest(Uri.parse('https://mailin-univet.vercel.app/dashboard'));
     } else {
       _isLoading = false;
     }
@@ -97,7 +123,7 @@ class _VercelDashboardScreenState extends State<VercelDashboardScreen> {
           child: ClipRRect(
             borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(24), topRight: Radius.circular(24)),
-            child: _isWebViewSupported
+            child: (!kIsWeb && _isWebViewSupported)
                 ? WebViewWidget(controller: _controller)
                 : Center(
                     child: Column(
