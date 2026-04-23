@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../theme.dart';
+import '../services/tauri_service.dart';
 
+// Only import webview_windows on non-web builds
 import 'package:webview_windows/webview_windows.dart' as win_web;
 
 class VisualSelectorScreen extends StatefulWidget {
@@ -22,13 +24,25 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
   String _currentUrl = '';
   bool _isWindowsInitError = false;
   bool _isSelectionMode = false;
-
-  // ══════════════════ Navigation Recorder ══════════════════
   bool _isRecordingMode = false;
   final List<Map<String, String>> _recordedSteps = [];
   late final TabController _tabController;
 
-  // CSS selector builder helper (shared between selection & recording)
+  // ── Platform Detection ──
+  // WebView is only supported on native Android/iOS (via webview_flutter)
+  // or native Windows (via webview_windows).
+  // On kIsWeb (Tauri) — NO native WebView is available; show graceful fallback.
+  bool get _isMobileWebView =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
+  bool get _isWindows =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+
+  bool get _isWebViewSupported => _isMobileWebView || _isWindows;
+
+  // ── CSS Selector builder JS ──
   final String _getCssSelectorFn = '''
     function getCssSelector(el) {
       if (!(el instanceof Element)) return '';
@@ -113,7 +127,6 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
     }, true);
   ''';
 
-  // Recording script: lets clicks through but intercepts BEFORE navigation
   String get _recordingScript => '''
     $_getCssSelectorFn
     window.NotifyMeRecording = true;
@@ -126,97 +139,79 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
       if (sel) {
         RecorderChannel.postMessage(JSON.stringify({selector: sel, label: label}));
       }
-      // Allow normal click to proceed (no preventDefault)
     }, true);
   ''';
-
-  bool _isWebViewSupported = kIsWeb ||
-      (defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.iOS ||
-          defaultTargetPlatform == TargetPlatform.windows);
-
-  bool get _isWindows =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    String targetUrl =
+    final String targetUrl =
         widget.url.startsWith('http') ? widget.url : 'https://${widget.url}';
 
     if (_isWindows) {
       _initWindowsWebview(targetUrl);
-    } else if (_isWebViewSupported) {
+    } else if (_isMobileWebView) {
+      // Native Android/iOS WebView
       _controller = WebViewController();
-      if (!kIsWeb) {
-        _controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+      _controller.setJavaScriptMode(JavaScriptMode.unrestricted);
 
-        // Channel for element selection
-        _controller.addJavaScriptChannel(
-          'SelectorChannel',
-          onMessageReceived: (message) {
-            setState(() => _currentSelector = message.message);
-          },
-        );
+      _controller.addJavaScriptChannel(
+        'SelectorChannel',
+        onMessageReceived: (message) {
+          if (mounted) setState(() => _currentSelector = message.message);
+        },
+      );
 
-        // Channel for navigation recording
-        _controller.addJavaScriptChannel(
-          'RecorderChannel',
-          onMessageReceived: (message) {
-            try {
-              final data =
-                  Map<String, dynamic>.from(_parseJson(message.message));
-              final selector = data['selector']?.toString() ?? '';
-              final label = data['label']?.toString() ?? '';
-              if (selector.isNotEmpty) {
-                setState(() {
-                  _recordedSteps.add({
-                    'selector': selector,
-                    'label': label.isNotEmpty
-                        ? label
-                        : selector.split('>').last.trim(),
-                  });
+      _controller.addJavaScriptChannel(
+        'RecorderChannel',
+        onMessageReceived: (message) {
+          try {
+            final data = Map<String, dynamic>.from(_parseJson(message.message));
+            final selector = data['selector']?.toString() ?? '';
+            final label = data['label']?.toString() ?? '';
+            if (selector.isNotEmpty && mounted) {
+              setState(() {
+                _recordedSteps.add({
+                  'selector': selector,
+                  'label': label.isNotEmpty
+                      ? label
+                      : selector.split('>').last.trim(),
                 });
-              }
-            } catch (_) {}
-          },
-        );
+              });
+            }
+          } catch (_) {}
+        },
+      );
 
-        _controller.setNavigationDelegate(
-          NavigationDelegate(
-            onPageFinished: (String url) {
-              if (mounted) {
-                setState(() {
-                  _isLoading = false;
-                  _currentUrl = url;
-                });
-                if (_isRecordingMode) {
-                  _controller.runJavaScript(_recordingScript);
-                } else {
-                  _controller.runJavaScript(_selectionScript);
-                  _updateSelectionMode(_isSelectionMode);
-                }
+      _controller.setNavigationDelegate(
+        NavigationDelegate(
+          onPageStarted: (_) {
+            if (mounted) setState(() => _isLoading = true);
+          },
+          onPageFinished: (String url) {
+            if (mounted) {
+              setState(() {
+                _isLoading = false;
+                _currentUrl = url;
+              });
+              if (_isRecordingMode) {
+                _controller.runJavaScript(_recordingScript);
+              } else {
+                _controller.runJavaScript(_selectionScript);
+                _updateSelectionMode(_isSelectionMode);
               }
-            },
-          ),
-        );
-      } else {
-        Future.delayed(const Duration(milliseconds: 500), () {
-          if (mounted)
-            setState(() {
-              _isLoading = false;
-              _currentUrl = targetUrl;
-            });
-        });
-      }
+            }
+          },
+        ),
+      );
       _controller.loadRequest(Uri.parse(targetUrl));
     } else {
+      // On kIsWeb (Tauri/browser): WebView not supported — show fallback
       _isLoading = false;
     }
   }
 
-  // Minimal JSON parser for our simple payload
   Map<String, dynamic> _parseJson(String input) {
     final result = <String, dynamic>{};
     final cleaned = input.replaceAll('{', '').replaceAll('}', '');
@@ -247,7 +242,7 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
         }
       });
       _windowsController.webMessage.listen((event) {
-        setState(() => _currentSelector = event['message'] ?? '');
+        if (mounted) setState(() => _currentSelector = event['message'] ?? '');
       });
       if (!mounted) return;
       setState(() {});
@@ -259,18 +254,23 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
   @override
   void dispose() {
     _tabController.dispose();
-    if (_isWindows) _windowsController.dispose();
+    if (_isWindows) {
+      try {
+        _windowsController.dispose();
+      } catch (_) {}
+    }
     super.dispose();
   }
 
   void _confirmSelection() {
-    // Build preNavigationScript from recorded steps
     String preNavScript = '';
     if (_recordedSteps.isNotEmpty) {
-      final lines = _recordedSteps.map((step) {
+      final lines = _recordedSteps.asMap().entries.map((e) {
+        final idx = e.key;
+        final step = e.value;
         return "// Klik: ${step['label']}\n"
-            "var el_${_recordedSteps.indexOf(step)} = document.querySelector('${(step['selector'] ?? '').replaceAll("'", "\\'")}');\n"
-            "if (el_${_recordedSteps.indexOf(step)}) el_${_recordedSteps.indexOf(step)}.click();";
+            "var el_$idx = document.querySelector('${(step['selector'] ?? '').replaceAll("'", "\\'")}');\n"
+            "if (el_$idx) el_$idx.click();";
       }).join('\n\n');
       preNavScript = lines;
     }
@@ -283,14 +283,16 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
   }
 
   void _updateSelectionMode(bool enable) {
-    String script =
+    final script =
         "window.NotifyMeSelectionEnabled = ${enable ? 'true' : 'false'};";
     if (_isWindows) {
-      if (_windowsController.value.isInitialized)
+      if (_windowsController.value.isInitialized) {
         _windowsController.executeScript(script);
-    } else {
-      if (!kIsWeb) _controller.runJavaScript(script);
+      }
+    } else if (_isMobileWebView) {
+      _controller.runJavaScript(script);
     }
+    // On kIsWeb: no-op, no WebView available
   }
 
   void _toggleMode() {
@@ -306,11 +308,17 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
       if (_isRecordingMode) {
         _isSelectionMode = false;
         _recordedSteps.clear();
-        if (!kIsWeb) _controller.runJavaScript(_recordingScript);
-        // Switch to recorder tab
+        if (_isWindows) {
+          _windowsController.executeScript(_recordingScript);
+        } else if (_isMobileWebView) {
+          _controller.runJavaScript(_recordingScript);
+        }
         _tabController.animateTo(1);
       } else {
-        if (!kIsWeb) {
+        if (_isWindows) {
+          _windowsController.executeScript(_selectionScript);
+          _updateSelectionMode(false);
+        } else if (_isMobileWebView) {
           _controller.runJavaScript(_selectionScript);
           _updateSelectionMode(false);
         }
@@ -322,16 +330,16 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
   void _expandSelection() {
     if (_isWindows) {
       _windowsController.executeScript('window.NotifyMeExpand()');
-    } else {
-      if (!kIsWeb) _controller.runJavaScript('window.NotifyMeExpand()');
+    } else if (_isMobileWebView) {
+      _controller.runJavaScript('window.NotifyMeExpand()');
     }
   }
 
   void _shrinkSelection() {
     if (_isWindows) {
       _windowsController.executeScript('window.NotifyMeShrink()');
-    } else {
-      if (!kIsWeb) _controller.runJavaScript('window.NotifyMeShrink()');
+    } else if (_isMobileWebView) {
+      _controller.runJavaScript('window.NotifyMeShrink()');
     }
   }
 
@@ -362,23 +370,25 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
           ],
         ),
         actions: [
-          // Recording toggle button
-          TextButton.icon(
-            onPressed: _toggleRecordingMode,
-            icon: Icon(
-              _isRecordingMode ? Icons.stop_circle : Icons.fiber_manual_record,
-              color: _isRecordingMode ? Colors.redAccent : Colors.orange,
-              size: 18,
-            ),
-            label: Text(
-              _isRecordingMode ? 'Stop Rekam' : 'Rekam Navigasi',
-              style: TextStyle(
+          if (_isWebViewSupported)
+            TextButton.icon(
+              onPressed: _toggleRecordingMode,
+              icon: Icon(
+                _isRecordingMode
+                    ? Icons.stop_circle
+                    : Icons.fiber_manual_record,
                 color: _isRecordingMode ? Colors.redAccent : Colors.orange,
-                fontWeight: FontWeight.bold,
-                fontSize: 12,
+                size: 18,
+              ),
+              label: Text(
+                _isRecordingMode ? 'Stop Rekam' : 'Rekam Navigasi',
+                style: TextStyle(
+                  color: _isRecordingMode ? Colors.redAccent : Colors.orange,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
               ),
             ),
-          ),
           if (_currentSelector.isNotEmpty)
             TextButton.icon(
               onPressed: _confirmSelection,
@@ -402,11 +412,11 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
       ),
       body: Column(
         children: [
-          // Selected element bar
+          // Selected element indicator bar
           if (_currentSelector.isNotEmpty)
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               color: isDark ? Colors.grey.shade900 : Colors.grey.shade100,
               child: Row(
                 children: [
@@ -420,16 +430,20 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
                         style: const TextStyle(
                             color: AppTheme.primaryColor,
                             fontFamily: 'monospace',
-                            fontSize: 12)),
+                            fontSize: 12),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
                   ),
-                  IconButton(
-                      icon: const Icon(Icons.arrow_upward, size: 18),
-                      onPressed: _expandSelection,
-                      tooltip: 'Pilih Induk'),
-                  IconButton(
-                      icon: const Icon(Icons.arrow_downward, size: 18),
-                      onPressed: _shrinkSelection,
-                      tooltip: 'Pilih Anak'),
+                  if (_isWebViewSupported) ...[
+                    IconButton(
+                        icon: const Icon(Icons.arrow_upward, size: 18),
+                        onPressed: _expandSelection,
+                        tooltip: 'Pilih Induk'),
+                    IconButton(
+                        icon: const Icon(Icons.arrow_downward, size: 18),
+                        onPressed: _shrinkSelection,
+                        tooltip: 'Pilih Anak'),
+                  ],
                 ],
               ),
             ),
@@ -439,17 +453,16 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
               controller: _tabController,
               physics: const NeverScrollableScrollPhysics(),
               children: [
-                // ── Tab 1: WebView ──
+                // Tab 1: WebView or Fallback
                 _buildWebViewArea(isDark),
-
-                // ── Tab 2: Recorded Steps ──
+                // Tab 2: Recorded Navigation Steps
                 _buildRecordedStepsPanel(isDark),
               ],
             ),
           ),
         ],
       ),
-      floatingActionButton: !_isRecordingMode
+      floatingActionButton: _isWebViewSupported && !_isRecordingMode
           ? FloatingActionButton.extended(
               onPressed: _toggleMode,
               backgroundColor:
@@ -461,33 +474,238 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
             )
-          : FloatingActionButton.extended(
-              onPressed: () {
-                _tabController.animateTo(0);
-              },
-              backgroundColor: Colors.grey.shade700,
-              icon: const Icon(Icons.web_asset),
-              label: const Text('Lihat Website',
-                  style: TextStyle(fontWeight: FontWeight.bold)),
-            ),
+          : _isRecordingMode
+              ? FloatingActionButton.extended(
+                  onPressed: () => _tabController.animateTo(0),
+                  backgroundColor: Colors.grey.shade700,
+                  icon: const Icon(Icons.web_asset),
+                  label: const Text('Lihat Website',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                )
+              : null,
     );
   }
 
+  // ── State for Tauri desktop paste flow ──
+  String _pastedSelector = '';
+
   Widget _buildWebViewArea(bool isDark) {
-    if (!_isWebViewSupported || _isWindowsInitError) {
+    // ── Fallback: Tauri/kIsWeb — use native Tauri window instead ──
+    if (!_isWebViewSupported) {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 16),
+            // Header
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primaryColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.ads_click,
+                      color: AppTheme.primaryColor, size: 28),
+                ),
+                const SizedBox(width: 16),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Visual Selector — Desktop',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold)),
+                      SizedBox(height: 4),
+                      Text(
+                        'Klik tombol di bawah untuk membuka halaman target.\nPilih elemen, lalu salin hasilnya ke sini.',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+
+            // Step 1: Open selector window
+            _buildStepCard(
+              isDark,
+              step: '1',
+              color: AppTheme.primaryColor,
+              title: 'Buka Window Selector',
+              subtitle: 'Klik tombol ini — browser window baru akan terbuka.\n'
+                  'Hover lalu klik elemen di halaman web yang ingin dipantau.\n'
+                  'Klik ✅ Simpan Selector di toolbar atas.',
+              action: FilledButton.icon(
+                onPressed: () {
+                  final url = widget.url.startsWith('http')
+                      ? widget.url
+                      : 'https://${widget.url}';
+                  TauriService.openSelectorWindow(url);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                          '🎯 Window selector dibuka! Pilih elemen, lalu klik ✅ Simpan Selector.'),
+                      duration: Duration(seconds: 4),
+                      backgroundColor: Color(0xFF0D2B1E),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.open_in_new, size: 18),
+                label: Text(
+                  'Buka ${widget.url.length > 30 ? widget.url.substring(0, 30) + "…" : widget.url}',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppTheme.primaryColor,
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Step 2: Paste from clipboard
+            _buildStepCard(
+              isDark,
+              step: '2',
+              color: Colors.orange,
+              title: 'Tempel Selector dari Clipboard',
+              subtitle: 'Setelah klik ✅ Simpan di window selector,\n'
+                  'selector otomatis tersalin ke clipboard.\n'
+                  'Klik tombol tempel di bawah:',
+              action: OutlinedButton.icon(
+                onPressed: () async {
+                  final text = await TauriService.readClipboard();
+                  if (text != null && text.isNotEmpty) {
+                    setState(() => _pastedSelector = text);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('✅ Selector: $text'),
+                        backgroundColor: const Color(0xFF0D2B1E),
+                      ),
+                    );
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                          content: Text(
+                              'Clipboard kosong. Pastikan sudah klik ✅ Simpan di window selector.')),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.content_paste, size: 18),
+                label: const Text('Tempel dari Clipboard',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.orange,
+                  side: BorderSide(color: Colors.orange.withOpacity(0.6)),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Step 3: Confirm or show pasted selector
+            if (_pastedSelector.isNotEmpty) ...[
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryColor.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(12),
+                  border:
+                      Border.all(color: AppTheme.primaryColor.withOpacity(0.3)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.check_circle,
+                            color: AppTheme.primaryColor, size: 18),
+                        const SizedBox(width: 8),
+                        const Text('Selector Siap:',
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 13)),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _pastedSelector,
+                      style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                          color: AppTheme.primaryColor),
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: () {
+                          setState(() {
+                            _currentSelector = _pastedSelector;
+                            _currentUrl = widget.url;
+                          });
+                        },
+                        icon: const Icon(Icons.check),
+                        label: const Text('Gunakan Selector Ini',
+                            style: TextStyle(fontWeight: FontWeight.bold)),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppTheme.primaryColor,
+                          foregroundColor: Colors.black,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+
+            // Confirm & return button
+            if (_currentSelector.isNotEmpty)
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _confirmSelection,
+                  icon: const Icon(Icons.save),
+                  label: const Text('Simpan & Kembali',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppTheme.primaryColor,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 80),
+          ],
+        ),
+      );
+    }
+
+    // ── Windows WebView failed to initialize ──
+    if (_isWindowsInitError) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.web_asset_off, size: 48, color: Colors.grey.shade600),
+            Icon(Icons.error_outline,
+                size: 48, color: Colors.redAccent.shade200),
             const SizedBox(height: 16),
-            Text(
-              !_isWebViewSupported
-                  ? 'Visual Selector tidak didukung di Platform ini.\nSilakan masukkan CSS Selector secara manual.'
-                  : 'Terjadi kesalahan memuat WebView Desktop.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
-            ),
+            const Text('Terjadi kesalahan memuat WebView Desktop.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey, fontSize: 13)),
             const SizedBox(height: 24),
             OutlinedButton.icon(
               onPressed: () => Navigator.pop(context),
@@ -502,15 +720,16 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
       );
     }
 
+    // ── Native WebView (Android / iOS / Windows) ──
     return Stack(
       children: [
-        (_isWindows && !kIsWeb)
+        _isWindows
             ? (_windowsController.value.isInitialized
                 ? win_web.Webview(_windowsController)
-                : const SizedBox())
-            : (!kIsWeb
-                ? WebViewWidget(controller: _controller)
-                : const SizedBox()),
+                : const Center(
+                    child: CircularProgressIndicator(
+                        color: AppTheme.primaryColor)))
+            : WebViewWidget(controller: _controller),
         if (_isLoading)
           const Center(
               child: CircularProgressIndicator(color: AppTheme.primaryColor)),
@@ -532,7 +751,7 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Mode Rekam Aktif — Navigasi ke sub-menu yang kamu tuju. Setiap klik akan direkam!',
+                      'Mode Rekam Aktif — Klik elemen/menu di website untuk merekam navigasi!',
                       style: TextStyle(
                           color: Colors.white,
                           fontSize: 12,
@@ -545,7 +764,7 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
           ),
         if (!_isLoading && _currentSelector.isEmpty && _isSelectionMode)
           Positioned(
-            bottom: 24,
+            bottom: 80,
             left: 24,
             right: 24,
             child: Container(
@@ -561,6 +780,66 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
             ),
           ),
       ],
+    );
+  }
+
+  Widget _buildStepCard(bool isDark,
+      {required String step,
+      required Color color,
+      required String title,
+      required String subtitle,
+      required Widget action}) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF111A14) : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.25)),
+        boxShadow: isDark
+            ? []
+            : [
+                BoxShadow(
+                    color: Colors.black.withOpacity(0.04),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2))
+              ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                    color: color.withOpacity(0.15), shape: BoxShape.circle),
+                child: Center(
+                  child: Text(step,
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                          color: color)),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(title,
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                        color: isDark ? Colors.white : Colors.black87)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(subtitle,
+              style: TextStyle(
+                  fontSize: 12, color: Colors.grey.shade500, height: 1.5)),
+          const SizedBox(height: 12),
+          action,
+        ],
+      ),
     );
   }
 
@@ -583,7 +862,7 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
                         color: AppTheme.primaryColor, size: 18),
                     const SizedBox(width: 8),
                     Text(
-                      'Langkah Navigasi Terekam (${_recordedSteps.length})',
+                      'Rekaman Navigasi (${_recordedSteps.length} langkah)',
                       style: const TextStyle(
                           fontWeight: FontWeight.bold, fontSize: 14),
                     ),
@@ -602,10 +881,10 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
                 const SizedBox(height: 4),
                 Text(
                   _isRecordingMode
-                      ? '🔴 Sedang merekam. Buka aplikasi lalu navigasi ke konten yang ingin dipantau.'
+                      ? '🔴 Sedang merekam. Navigasi ke konten yang ingin dipantau.'
                       : _recordedSteps.isEmpty
-                          ? 'Tekan "Rekam Navigasi" lalu buka sub-menu/login di website.'
-                          : '✅ ${_recordedSteps.length} langkah terekam. Script akan dibuat otomatis.',
+                          ? 'Tekan "Rekam Navigasi" lalu navigasi di website.'
+                          : '✅ ${_recordedSteps.length} langkah terekam. Script dibuat otomatis.',
                   style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
                 ),
               ],
@@ -623,7 +902,10 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
                             size: 64, color: Colors.grey.shade300),
                         const SizedBox(height: 16),
                         Text(
-                          'Belum ada langkah terekam.\n1. Tekan "Rekam Navigasi" di atas\n2. Klik menu / sub-menu di website\n3. Script JS dibuat otomatis!',
+                          'Belum ada langkah terekam.\n'
+                          '1. Tekan "Rekam Navigasi" di atas\n'
+                          '2. Klik menu / sub-menu di website\n'
+                          '3. Script JS dibuat otomatis!',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                               color: Colors.grey.shade500,
@@ -716,7 +998,7 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
                     children: [
                       const Icon(Icons.code, size: 14, color: Colors.grey),
                       const SizedBox(width: 6),
-                      const Text('Script yang Akan Dibuat:',
+                      const Text('Script yang akan dibuat:',
                           style: TextStyle(fontSize: 11, color: Colors.grey)),
                       const Spacer(),
                       Text('${_recordedSteps.length} klik',
@@ -731,8 +1013,8 @@ class _VisualSelectorScreenState extends State<VisualSelectorScreen>
                     _recordedSteps
                         .asMap()
                         .entries
-                        .map((e) =>
-                            '// ${e.value['label']}\ndocument.querySelector(\'${(e.value['selector'] ?? '').replaceAll("'", "\\'")}\')?.click();')
+                        .map((e) => '// ${e.value['label']}\n'
+                            "document.querySelector('${(e.value['selector'] ?? '').replaceAll("'", "\\'")}')?.click();")
                         .join('\n'),
                     style: const TextStyle(
                         fontSize: 10,

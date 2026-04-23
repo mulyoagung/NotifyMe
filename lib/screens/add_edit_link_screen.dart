@@ -28,7 +28,9 @@ class _AddEditLinkScreenState extends State<AddEditLinkScreen> {
 
   late final WebViewController _controller;
   bool _isLoading = true;
-  bool _isWebViewSupported = kIsWeb ||
+  // WebView runs only on native Android/iOS. Never on kIsWeb (Tauri/browser).
+  bool get _isWebViewSupported =>
+      !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS);
 
@@ -48,23 +50,17 @@ class _AddEditLinkScreenState extends State<AddEditLinkScreen> {
       _isActive = widget.link!.isActive;
     }
 
+    // _isWebViewSupported is false when kIsWeb → safe to initialize controller only on real mobile
     if (_isWebViewSupported) {
       _controller = WebViewController();
-      if (!kIsWeb) {
-        _controller.setJavaScriptMode(JavaScriptMode.unrestricted);
-        _controller.setNavigationDelegate(
-          NavigationDelegate(
-            onPageFinished: (String url) {
-              if (mounted) setState(() => _isLoading = false);
-            },
-          ),
-        );
-      } else {
-        // on web we just consider it loaded almost immediately because NavigationDelegate is not supported
-        Future.delayed(const Duration(milliseconds: 500), () {
-          if (mounted) setState(() => _isLoading = false);
-        });
-      }
+      _controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+      _controller.setNavigationDelegate(
+        NavigationDelegate(
+          onPageFinished: (String url) {
+            if (mounted) setState(() => _isLoading = false);
+          },
+        ),
+      );
     } else {
       _isLoading = false;
     }
@@ -631,7 +627,7 @@ class _AddEditLinkScreenState extends State<AddEditLinkScreen> {
                         Expanded(
                           child: Stack(
                             children: [
-                              (!kIsWeb && _isWebViewSupported)
+                              _isWebViewSupported
                                   ? WebViewWidget(controller: _controller)
                                   : _buildMockWebView(isDark),
                               if (_isLoading && _urlController.text.isNotEmpty)
@@ -977,25 +973,61 @@ class _AddEditLinkScreenState extends State<AddEditLinkScreen> {
 
   Widget _buildMockWebView(bool isDark) {
     return Container(
-      color: isDark ? const Color(0xFF161D1A) : Colors.grey.shade100,
+      color: isDark ? const Color(0xFF0D1510) : Colors.grey.shade50,
       child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.web_asset_off, size: 48, color: Colors.grey.shade600),
-            const SizedBox(height: 16),
-            Text(
-              'Web Preview not supported\non Desktop/Web.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
+            // Browser-style icon
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? Colors.white.withOpacity(0.05)
+                    : Colors.grey.shade100,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(Icons.monitor, size: 40, color: Colors.grey.shade400),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 20),
             Text(
-              'Klik "Pilih Elemen" di bawah untuk membuka popup,\natau masukkan CSS Selector secara manual.',
-              textAlign: TextAlign.center,
+              'Preview tidak tersedia di Desktop',
               style: TextStyle(
-                color: AppTheme.primaryColor.withOpacity(0.8),
-                fontSize: 11,
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+                color: isDark ? Colors.white70 : Colors.black54,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Masukkan URL dan gunakan tombol "Pilih Elemen"\nuntuk menentukan bagian halaman yang ingin dipantau.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
+            ),
+            const SizedBox(height: 24),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppTheme.primaryColor.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(8),
+                border:
+                    Border.all(color: AppTheme.primaryColor.withOpacity(0.2)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.ads_click,
+                      size: 14, color: AppTheme.primaryColor),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Klik "Pilih Elemen" di kolom CSS Selector',
+                    style: TextStyle(
+                      color: AppTheme.primaryColor,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],

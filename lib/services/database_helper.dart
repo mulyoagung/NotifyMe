@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../models/monitored_link.dart';
@@ -17,7 +18,12 @@ class DatabaseHelper {
   }
 
   Future<Database> _initDB(String filePath) async {
-    if (Platform.isWindows || Platform.isLinux) {
+    // kIsWeb = true means we are running inside Tauri (desktop), which is Windows
+    // Platform.isWindows would crash on kIsWeb since dart:io Platform is unavailable.
+    // Use sqfliteFfiInit for both kIsWeb (Tauri/Windows) and native Windows.
+    final bool needsFfi =
+        kIsWeb || (!kIsWeb && (Platform.isWindows || Platform.isLinux));
+    if (needsFfi) {
       sqfliteFfiInit();
       databaseFactory = databaseFactoryFfi;
     }

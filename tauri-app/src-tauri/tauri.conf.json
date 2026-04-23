@@ -32,7 +32,7 @@
       "iconAsTemplate": true
     },
     "security": {
-      "csp": "default-src 'self' tauri: 'unsafe-inline' 'unsafe-eval' https://*.vercel.app"
+      "csp": "default-src 'self' tauri: 'unsafe-inline' 'unsafe-eval' https: data: blob:"
     }
   },
   "bundle": {

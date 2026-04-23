@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
-import 'dart:convert' as dart_convert;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:workmanager/workmanager.dart';
@@ -28,14 +28,20 @@ void callbackDispatcher() {
   });
 }
 
-String _formatSummary(String content) {
+/// Build a human-readable notification body from HTML-fingerprint snapshots.
+/// Shows the innerText of newly added children (up to 3 items).
+String _formatSummary(String newRaw, String oldRaw) {
   try {
-    final List<dynamic> list = dart_convert.jsonDecode(content);
-    if (list.isEmpty) return 'Tidak ada konten baru.';
-    // Show first 3 new strings naturally separated
-    return list.take(3).map((e) => '• $e').join('\n');
+    final newItems = decodeSnapshots(newRaw);
+    final oldItems = decodeSnapshots(oldRaw);
+    final newOnes = diffSnapshots(oldItems, newItems);
+    if (newOnes.isEmpty) {
+      // Fallback: just show first item's key
+      return newItems.isNotEmpty ? newItems.first.key : 'Konten berubah.';
+    }
+    return newOnes.take(3).map((e) => '\u2022 ${e.key}').join('\n');
   } catch (_) {
-    return content.length > 200 ? '${content.substring(0, 200)}...' : content;
+    return 'Konten berubah.';
   }
 }
 
@@ -86,14 +92,23 @@ Future<void> _checkUpdates() async {
       final newContent = await ScraperService.fetchAndExtract(link);
 
       if (newContent != null) {
-        if (link.lastSnapshot != newContent) {
+        // ── HTML-fingerprint Set diff ──────────────────────────────────────
+        // Compare by unique text keys (position-independent), not raw strings.
+        final oldItems = decodeSnapshots(link.lastSnapshot);
+        final newItems = decodeSnapshots(newContent);
+        final added   = diffSnapshots(oldItems, newItems);
+        final removed = diffSnapshots(newItems, oldItems);
+        final hasChange = added.isNotEmpty || removed.isNotEmpty;
+        // ──────────────────────────────────────────────────────────────────
+
+        if (hasChange) {
           link.hasUpdate = true;
-          link.previousSnapshot = link.lastSnapshot;
+          link.previousSnapshot = link.lastSnapshot; // save old for diff view
           if (pushEnabled) {
             await NotificationService.instance.showUpdateNotification(
               link.id ?? 0,
-              'Pembaruan pada ${link.name}',
-              _formatSummary(newContent),
+              'Pembaruan pada \${link.name}',
+              _formatSummary(newContent, link.lastSnapshot),
               link.url,
             );
           }

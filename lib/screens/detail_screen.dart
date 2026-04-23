@@ -3,10 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:diff_match_patch/diff_match_patch.dart';
 import '../models/monitored_link.dart';
 import '../theme.dart';
 import '../services/database_helper.dart';
+import '../services/scraper_service.dart'; // for decodeSnapshots / diffSnapshots
 
 class DetailScreen extends StatefulWidget {
   final MonitoredLink link;
@@ -38,71 +40,60 @@ class _DetailScreenState extends State<DetailScreen> {
                 setState(() {
                   _isLoading = false;
                 });
-                if (widget.link.cssSelector.isNotEmpty) {
-                  bool hasPrevious = widget.link.previousSnapshot.isNotEmpty &&
-                      widget.link.hasUpdate;
-                  String oldItemsStr =
-                      hasPrevious ? widget.link.previousSnapshot : '[]';
+                if (widget.link.cssSelector.isNotEmpty &&
+                    widget.link.hasUpdate) {
+                  // Build the list of NEW child keys from the Dart side
+                  final oldItems =
+                      decodeSnapshots(widget.link.previousSnapshot);
+                  final newItems =
+                      decodeSnapshots(widget.link.lastSnapshot);
+                  final newOnes = diffSnapshots(oldItems, newItems);
+
+                  // Serialise new keys as a JS string array literal
+                  final newKeysJs = jsonEncode(
+                      newOnes.map((e) => e.key).toList());
+
+                  final sel = widget.link.cssSelector
+                      .replaceAll('"', '\\"')
+                      .replaceAll("'", "\\'");
 
                   _controller.runJavaScript('''
-                    setTimeout(() => {
-                      var selector = "${widget.link.cssSelector.replaceAll('"', '\\"')}";
-                      if (!selector) return;
-                      var nodes = document.querySelectorAll(selector);
-                      if (nodes.length === 0) return;
-                      
-                      var oldItems = $oldItemsStr;
-                      var newLines = [];
-                      
-                      // 1. Compute which text lines are brand new
-                      for (var i = 0; i < nodes.length; i++) {
-                        if (nodes[i].innerText) {
-                          var lines = nodes[i].innerText.split('\\n');
-                          for (var j = 0; j < lines.length; j++) {
-                            var text = lines[j].trim();
-                            if (text.length > 0) {
-                              if (oldItems && oldItems.length > 0) {
-                                if (oldItems.indexOf(text) === -1 && newLines.indexOf(text) === -1) {
-                                  newLines.push(text);
-                                }
-                              } else {
-                                if (newLines.indexOf(text) === -1) newLines.push(text);
-                              }
+                    setTimeout(function() {
+                      var root = document.querySelector("$sel");
+                      if (!root) return;
+
+                      var newKeys = $newKeysJs;
+                      if (!newKeys || newKeys.length === 0) return;
+
+                      // Get direct children (same level as scraper)
+                      var children = Array.from(root.children);
+                      if (children.length === 0) children = [root];
+
+                      var firstHighlighted = null;
+
+                      for (var i = 0; i < children.length; i++) {
+                        var el = children[i];
+                        var text = (el.innerText || el.textContent || '')
+                                      .trim()
+                                      .replace(/\\s+/g, " ")
+                                      .substring(0, 200);
+
+                        // Check if this child is one of the new ones
+                        for (var k = 0; k < newKeys.length; k++) {
+                          if (text === newKeys[k] || text.startsWith(newKeys[k].substring(0, Math.min(newKeys[k].length, 80)))) {
+                            el.style.outline = "4px solid #00F4B1";
+                            el.style.backgroundColor = "rgba(0,244,177,0.2)";
+                            el.style.borderRadius = "8px";
+                            el.style.transition = "all 0.4s ease";
+                            if (!firstHighlighted) {
+                              firstHighlighted = el;
+                              el.scrollIntoView({behavior: "smooth", block: "center"});
                             }
+                            break;
                           }
                         }
                       }
-                      
-                      var firstNew = null;
-                      
-                      // 2. Find and highlight the deepest DOM element that renders each new line
-                      for (var i = 0; i < nodes.length; i++) {
-                        var root = nodes[i];
-                        // Reverse array to check deepest children first
-                        var allEls = Array.from(root.querySelectorAll('*')).reverse();
-                        
-                        for (var k = 0; k < newLines.length; k++) {
-                           var line = newLines[k];
-                           for (var j = 0; j < allEls.length; j++) {
-                              var el = allEls[j];
-                              
-                              if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE') continue;
-                              
-                              if (el.innerText && el.innerText.indexOf(line) !== -1) {
-                                  el.style.outline = '4px solid #00F4B1';
-                                  el.style.backgroundColor = 'rgba(0, 244, 177, 0.3)';
-                                  el.style.transition = 'all 0.3s ease';
-                                  
-                                  if (!firstNew) {
-                                    firstNew = el;
-                                    el.scrollIntoView({behavior: 'smooth', block: 'center'});
-                                  }
-                                  break; // Deepest element found for this line, go to next line
-                              }
-                           }
-                        }
-                      }
-                    }, 1000);
+                    }, 1200);
                   ''');
                 }
               }
@@ -141,26 +132,26 @@ class _DetailScreenState extends State<DetailScreen> {
     }
   }
 
-  String _formatJsonList(String jsonString) {
-    try {
-      final List<dynamic> list = jsonDecode(jsonString);
-      if (list.isEmpty) return 'Array kosong (Tidak ada text).';
-      return list.map((item) => '• $item').join('\n\n');
-    } catch (_) {
-      return jsonString;
-    }
-  }
 
   void _openSiteFullscreen() {
+    final rawUrl = widget.link.url;
+    final fullUrl = rawUrl.startsWith('http') ? rawUrl : 'https://$rawUrl';
+
+    if (kIsWeb || !_isWebViewSupported) {
+      // On Tauri/desktop: open in system browser
+      final uri = Uri.parse(fullUrl);
+      launchUrl(uri, mode: LaunchMode.externalApplication);
+      return;
+    }
+
+    // Native mobile: open WebView fullscreen
     Navigator.push(context, MaterialPageRoute(builder: (context) {
       return Scaffold(
         appBar: AppBar(title: Text(widget.link.name)),
         body: WebViewWidget(
             controller: WebViewController()
               ..setJavaScriptMode(JavaScriptMode.unrestricted)
-              ..loadRequest(Uri.parse(widget.link.url.startsWith('http')
-                  ? widget.link.url
-                  : 'https://${widget.link.url}'))),
+              ..loadRequest(Uri.parse(fullUrl))),
       );
     }));
   }
@@ -444,26 +435,86 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
-  Widget _buildDiffView(String oldText, String newText, bool isDark) {
-    String oldFormatted = _formatJsonList(oldText);
-    String newFormatted = _formatJsonList(newText);
+  Widget _buildDiffView(String oldRaw, String newRaw, bool isDark) {
+    final oldItems = decodeSnapshots(oldRaw);
+    final newItems = decodeSnapshots(newRaw);
 
-    if (oldFormatted == newFormatted ||
-        oldFormatted == 'Array kosong (Tidak ada text).') {
-      return Text(
-        newFormatted,
-        style: TextStyle(
-          fontFamily: 'monospace',
-          fontSize: 13,
-          height: 1.5,
-          color: isDark ? Colors.grey.shade300 : Colors.black87,
-        ),
-      );
+    // Items added in new snapshot
+    final added = diffSnapshots(oldItems, newItems);
+    // Items removed since old snapshot
+    final removed = diffSnapshots(newItems, oldItems);
+
+    if (oldItems.isEmpty && newItems.isEmpty) {
+      return const Text('Belum ada snapshot konten.',
+          style: TextStyle(fontFamily: 'monospace', fontSize: 13));
     }
 
-    List<Diff> diffs = diff(oldFormatted, newFormatted);
-    cleanupSemantic(diffs);
+    if (added.isEmpty && removed.isEmpty) {
+      // No structural change, fall back to text diff of full content
+      final oldText = oldItems.map((e) => e.key).join('\n');
+      final newText = newItems.map((e) => e.key).join('\n');
+      return _buildTextDiff(oldText, newText, isDark);
+    }
 
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (added.isNotEmpty) ..._buildChangeCards(
+            added, true, isDark, 'DITAMBAHKAN (${added.length})'),
+        if (removed.isNotEmpty) ..._buildChangeCards(
+            removed, false, isDark, 'DIHAPUS (${removed.length})'),
+      ],
+    );
+  }
+
+  List<Widget> _buildChangeCards(
+      List<ElementSnapshot> items, bool isAdded, bool isDark, String label) {
+    return [
+      Padding(
+        padding: const EdgeInsets.only(top: 12, bottom: 6),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.2,
+            color: isAdded ? const Color(0xFF00F4B1) : Colors.redAccent,
+          ),
+        ),
+      ),
+      ...items.map((item) => Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: isAdded
+                  ? (isDark
+                      ? const Color(0xFF00F4B1).withOpacity(0.08)
+                      : const Color(0xFFE8FFF7))
+                  : (isDark
+                      ? Colors.redAccent.withOpacity(0.08)
+                      : Colors.red.shade50),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: isAdded
+                    ? const Color(0xFF00F4B1).withOpacity(0.4)
+                    : Colors.redAccent.withOpacity(0.4),
+              ),
+            ),
+            child: Text(
+              item.key,
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.5,
+                color: isDark ? Colors.grey.shade200 : Colors.black87,
+              ),
+            ),
+          )),
+    ];
+  }
+
+  Widget _buildTextDiff(String oldText, String newText, bool isDark) {
+    final diffs = diff(oldText, newText);
+    cleanupSemantic(diffs);
     return RichText(
       text: TextSpan(
         style: TextStyle(
@@ -473,28 +524,20 @@ class _DetailScreenState extends State<DetailScreen> {
           color: isDark ? Colors.grey.shade300 : Colors.black87,
         ),
         children: diffs.map((d) {
-          Color backgroundColor = Colors.transparent;
-          Color textColor = isDark ? Colors.grey.shade300 : Colors.black87;
-          TextDecoration decoration = TextDecoration.none;
-
+          Color bg = Colors.transparent;
+          Color fg = isDark ? Colors.grey.shade300 : Colors.black87;
+          TextDecoration dec = TextDecoration.none;
           if (d.operation == DIFF_INSERT) {
-            backgroundColor = const Color(0xFF00F4B1).withOpacity(0.2);
-            textColor =
-                isDark ? const Color(0xFF00F4B1) : Colors.green.shade800;
+            bg = const Color(0xFF00F4B1).withOpacity(0.2);
+            fg = isDark ? const Color(0xFF00F4B1) : Colors.green.shade800;
           } else if (d.operation == DIFF_DELETE) {
-            backgroundColor = Colors.red.withOpacity(0.2);
-            textColor = isDark ? Colors.redAccent : Colors.red.shade800;
-            decoration = TextDecoration.lineThrough;
+            bg = Colors.red.withOpacity(0.15);
+            fg = isDark ? Colors.redAccent : Colors.red.shade800;
+            dec = TextDecoration.lineThrough;
           }
-
           return TextSpan(
-            text: d.text,
-            style: TextStyle(
-              backgroundColor: backgroundColor,
-              decoration: decoration,
-              color: textColor,
-            ),
-          );
+              text: d.text,
+              style: TextStyle(backgroundColor: bg, color: fg, decoration: dec));
         }).toList(),
       ),
     );
